@@ -24,6 +24,9 @@ For usage see https://www.arduino.cc/en/Reference/SoftwareSerial
 
 ## Versioning
 
+### version 1.0.1 April 2023 / paulvha@hotmail.com
+ * minor adjustments and updated comments in source code
+
 ### version 1.0 April 2023 / paulvha@hotmail.com
  * Initial version SoftwareSerial for Library 1.8.9 for samd21
 

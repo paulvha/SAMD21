@@ -34,7 +34,7 @@
     * RX on one pin at a time.
     * No TX and RX at the same time.
     * TX gets priority. So if SAMD21 is receiving a string of characters
-    and you do a Serial.print() the print will begin immediately and any additional
+    and you do a mySerial.print() the print will begin immediately and any additional
     RX characters will be lost.
     * Uses TC4 and TC5. This will remove PWM and Tone capabilities
     * Parity is supported during TX but not checked during RX.
@@ -58,7 +58,7 @@
 #include <Stream.h>
 
 #define SWS_BUFFER_SIZE 128      // RX and TX buffer size
-#define TIMER_FREQ 6000000L      // 6Mhz
+#define TIMER_FREQ 6000000L      // 6Mhz (see configTimer())
 
 class SoftwareSerial : public Stream
 {

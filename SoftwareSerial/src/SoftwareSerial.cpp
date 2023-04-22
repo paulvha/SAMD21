@@ -34,9 +34,9 @@
     * RX on one pin at a time.
     * No TX and RX at the same time.
     * TX gets priority. So if SAMD21 is receiving a string of characters
-    and you do a Serial.print() the print will begin immediately and any additional
+    and you do a mySerial.print() the print will begin immediately and any additional
     RX characters will be lost.
-    * Uses TC4 and TC5. This will remove PWM and Tone capabilities
+    * Uses timer TC4 and TC5. This will remove PWM and Tone capabilities
     * Parity is supported during TX but not checked during RX.
     * Enabling multiple ports causes 57600 RX to fail (because there is additional instance switching overhead)
 
@@ -62,10 +62,14 @@ SoftwareSerial *SWS_handle = 0;
 #define SWS_TC         TC4        // as we use 32 bit counter TC5 is also used
 #define SWS_TC_IRQn    TC4_IRQn
 
-//#define DEBUG
+//#define DEBUG                   // uncomment for time signal _on debugPin
 
 void TC4_Handler (void) __attribute__ ((weak, alias("SwS_Handler")));
 
+/**
+ * This will disable and reset the timer
+ * configuration.
+ */
 static inline void resetTC (Tc* TCx)
 {
   // Disable TCx
@@ -78,6 +82,9 @@ static inline void resetTC (Tc* TCx)
   while (TCx->COUNT32.CTRLA.bit.SWRST);
 }
 
+/**
+ * called when level change happens on _rxPin
+ */
 inline void _software_serial_isr(void)
 {
   SWS_handle->rxBit();
@@ -98,8 +105,7 @@ bool SoftwareSerial::begin(uint32_t baudRate)
 
 bool SoftwareSerial::begin(uint32_t baudRate, uint16_t config)
 {
-
-  // in case baudrate change is requested
+  // in case a second begin is called e.g. to request a baudrate change
   if (IsActive) end();
   IsActive = true;
 
@@ -139,16 +145,18 @@ bool SoftwareSerial::begin(uint32_t baudRate, uint16_t config)
   digitalWrite(_txPin, _invertLogic ? LOW : HIGH);
   pinMode(_txPin, OUTPUT);
 
+  // for faster change the _txPin
   _txport = g_APinDescription[_txPin].ulPort;
   _txpad = g_APinDescription[_txPin].ulPin;
   _txpadMask = (1ul << _txpad);
 
-  // set config
+  // set config (stop, databits, parity)
   softwareserialSetConfig(config);
 
   // calculate timing
+  // setting the timing adjustments was "trial and error" and checking with a logic analyser
   rxSysTicksPerBit = (TIMER_FREQ / baudRate) * 0.93; //Shorten the number of sysTicks a small amount because we are doing a mod operation
-  txSysTicksPerBit = (TIMER_FREQ / baudRate) - 8;   //Shorten the txSysTicksPerBit by the number of ticks needed to run the txHandler ISR
+  txSysTicksPerBit = (TIMER_FREQ / baudRate) - 8;    //Shorten the txSysTicksPerBit by the number of ticks needed to run the txHandler ISR
 
   // fine tine (as much as possible)
   if (baudRate == 19200) txSysTicksPerBit = txSysTicksPerBit - 4;
@@ -156,6 +164,7 @@ bool SoftwareSerial::begin(uint32_t baudRate, uint16_t config)
   if (baudRate == 57600) txSysTicksPerBit = txSysTicksPerBit - 5;
   if (baudRate == 115200) txSysTicksPerBit = txSysTicksPerBit - 5;
 
+  // this is used for setting the timeout for each byte during RX
   rxSysTicksPerByte = (TIMER_FREQ / baudRate) * (_dataBits + _parityBits + _stopBits);
 
   //During RX, if leftover systicks is more than a fraction of a bit, we will call it a bit
@@ -190,8 +199,10 @@ int SoftwareSerial::available()
   return (rxBufferHead + SWS_BUFFER_SIZE - rxBufferTail) % SWS_BUFFER_SIZE;
 }
 
-//Returns true if overflow flag is set
-//Clears flag when called
+/**
+ * Returns true if overflow flag is set
+ * Clears flag when called
+ */
 bool SoftwareSerial::overflow()
 {
   if (_rxBufferOverflow || _txBufferOverflow)
@@ -223,6 +234,11 @@ int SoftwareSerial::peek()
   return (rxBuffer[tempTail]);
 }
 
+/**
+ * this is more a wait to make sure
+ * all the previous bytes and bits
+ * have been send
+ */
 void SoftwareSerial::flush()
 {
   while (txInUse)
@@ -238,7 +254,8 @@ void SoftwareSerial::rxBit(void)
   digitalWrite(_debugPin, HIGH);
 #endif
 
-  if (lastBitTime == 0)
+
+  if (lastBitTime == 0)             // if first change (start-bit)
   {
     startTimer(rxSysTicksPerByte);  // set BYTE time out
     bitCounter = 0;
@@ -250,7 +267,8 @@ void SoftwareSerial::rxBit(void)
   {
     bitTime = SWS_TC->COUNT32.COUNT.reg; // Capture current running
 
-    //Calculate the number of bits that have occured since last PCI
+    //Calculate the number of bits that have occured since last interrupt
+    //it can be more than 1 !
     uint8_t numberOfBits = (bitTime - lastBitTime) / rxSysTicksPerBit;
 
     if (bitCounter == 0)
@@ -315,8 +333,11 @@ void SoftwareSerial::beginTX()
   startTimer(txSysTicksPerBit);
 }
 
-//Assumes the global variables have been set: _parity, _dataBits, outgoingByte
-//Sets global variable _parityBit
+/**
+ * calculate the parity for OUTGOING byte
+ * Assumes the global variables have been set: _parity, _dataBits, outgoingByte
+ * Sets global variable _parityBit
+ */
 void SoftwareSerial::calcParityBit()
 {
   if (_parity == 0)
@@ -341,6 +362,9 @@ void SoftwareSerial::calcParityBit()
   }
 }
 
+/**
+ * called by timer interrupt to send the next BIT
+ */
 void SoftwareSerial::txHandler()
 {
 #ifdef DEBUG
@@ -350,10 +374,8 @@ void SoftwareSerial::txHandler()
   if (bitCounter < _dataBits) // Data bits 0 to 7
   {
     restartTimer(txSysTicksPerBit);                   //Direct reg write to decrease execution time
-      if (outgoingByte & 0x01) PORT->Group[_txport].OUTSET.reg = _txpadMask;
-      else PORT->Group[_txport].OUTCLR.reg = _txpadMask;
 
-    /*if (_invertLogic == false){ // normal operation
+    if (_invertLogic == false){ // normal operation
       if (outgoingByte & 0x01) PORT->Group[_txport].OUTSET.reg = _txpadMask;
       else PORT->Group[_txport].OUTCLR.reg = _txpadMask;
     }
@@ -361,7 +383,7 @@ void SoftwareSerial::txHandler()
       if (outgoingByte & 0x01) PORT->Group[_txport].OUTCLR.reg = _txpadMask;
       else PORT->Group[_txport].OUTSET.reg = _txpadMask;
     }
-*/
+
     outgoingByte >>= 1;
     bitCounter++;
   }
@@ -461,13 +483,14 @@ void SoftwareSerial::rxEndOfByte()
 {
   stopTimer();
 
-  //Finish out bytes that are less than 8 bits
+  // Finish out bytes that are less than 8 bits
+  // when enabling the print() the timing is completely off
+  // but sometimes you want to see the result
 #ifdef DEBUG
-   // SerialUSB.println("bitCounter: ");
+   // SerialUSB.print("bitCounter: ");
    // SerialUSB.println(bitCounter);
-   // SerialUSB.println("incoming: ");
+   // SerialUSB.print("incoming: ");
    // SerialUSB.println(incomingByte, HEX);
-
 #endif
   bitCounter--; //Remove start bit from count
 
@@ -706,6 +729,11 @@ bool SoftwareSerial::softwareserialSetConfig(uint16_t config)
   return retval;
 }
 
+/**
+ * configure the TC4 timer in 32 bits, so TC5 is also used
+ * the clock is set to 6Mhz ( 48 /8)
+ * If you change the clock also change TIMER_FREQ in SoftwareSerial.h
+ */
 void SoftwareSerial::configTimer()
 {
   GCLK->GENDIV.reg = GCLK_GENDIV_DIV(1) |          // Use the 48MHz system clock
@@ -752,7 +780,7 @@ void SoftwareSerial::stopTimer()
   SWS_TC->COUNT32.CTRLA.reg &= ~TC_CTRLA_ENABLE;
   while ( SWS_TC->COUNT32.STATUS.bit.SYNCBUSY );      // wait for sync
 
-  NVIC_DisableIRQ(SWS_TC_IRQn);                       // disable time interrupt
+  NVIC_DisableIRQ(SWS_TC_IRQn);                       // disable timer interrupt
   NVIC_ClearPendingIRQ(SWS_TC_IRQn);
 }
 
@@ -763,6 +791,9 @@ void SoftwareSerial::restartTimer(uint16_t comp)
   while ( SWS_TC->COUNT32.STATUS.bit.SYNCBUSY );      // wait for sync
 }
 
+/**
+ * start listening for incoming bits (change on _rxPin
+ */
 void SoftwareSerial::listen()
 {
   // see example4_multiport
@@ -780,14 +811,19 @@ void SoftwareSerial::listen()
 
 void SoftwareSerial::stopListening()
 {
-  // Disable the timer interrupt in the NVIC.
-  stopTimer();
+  stopTimer();                        // Disable the timer interrupt in the NVIC.
 
   detachInterrupt(_rxPin);
 
   SWS_handle == NULL;
 }
 
+/**
+ * when using multiple SoftwareSerial instances the interrupt from the
+ * TC4 timer can only be connected to a single instance.
+ * This call will return true if the current SoftwareSerial instance
+ * has the interrupt connected. If not, do a call .listen() to reconnect
+ */
 bool SoftwareSerial::isListening()
 {
   return (this == SWS_handle);
@@ -797,6 +833,9 @@ bool SoftwareSerial::isListening()
 extern "C" {
 #endif
 
+/**
+ * called as TC4 interrupt handler
+ */
 void SwS_Handler(void)
 {
   // Clear the interrupt
