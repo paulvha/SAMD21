@@ -76,6 +76,7 @@ class SoftwareSerial : public Stream
     bool overflow();
     void listen();
     bool isListening();
+    void stopListening();
 
     virtual size_t write(uint8_t toSend);
     virtual size_t write(const uint8_t *buffer, size_t size);
@@ -112,7 +113,6 @@ class SoftwareSerial : public Stream
     void restartTimer(uint16_t comp);
 
     //For RX
-    void stopListening();
     volatile uint8_t rxBuffer[SWS_BUFFER_SIZE];
     volatile uint8_t rxBufferHead = 0;
     uint8_t rxBufferTail = 0;

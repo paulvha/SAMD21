@@ -811,6 +811,8 @@ void SoftwareSerial::listen()
 
 void SoftwareSerial::stopListening()
 {
+  if (SWS_handle != this) return;
+
   stopTimer();                        // Disable the timer interrupt in the NVIC.
 
   detachInterrupt(_rxPin);

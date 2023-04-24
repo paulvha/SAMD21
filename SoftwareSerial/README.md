@@ -24,6 +24,9 @@ For usage see https://www.arduino.cc/en/Reference/SoftwareSerial
 
 ## Versioning
 
+### version 1.0.2 April 2023 / paulvha@hotmail.com
+ * moved stopListening() to public
+
 ### version 1.0.1 April 2023 / paulvha@hotmail.com
  * minor adjustments and updated comments in source code
 
